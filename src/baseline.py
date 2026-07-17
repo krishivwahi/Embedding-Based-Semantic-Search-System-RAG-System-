@@ -1,6 +1,6 @@
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from .ingest import Chunk
+from .ingest import Chunk #chunky boy
 class TfidfRetriever:
     def __init__(self, chunks: list[Chunk]):
         self.chunks = chunks

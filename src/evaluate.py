@@ -13,7 +13,7 @@ def mrr(retrieved: list[str], relevant: set[str]) -> float:
 def evaluate(retriever, queries: dict, qrels: dict, k: int = 10) -> dict:
     p, r, m = [], [], []
     for qid, query in queries.items():
-        results = retriever.search(query, k=k * 2)  # extra headroom for dedupe
+        results = retriever.search(query, k=k * 2)
         doc_ids = []
         for chunk, _score in results:
             if chunk.doc_id not in doc_ids:

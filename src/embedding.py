@@ -15,7 +15,6 @@ class EmbeddingRetriever:
             show_progress_bar=True,
         )
         embeddings = np.asarray(embeddings, dtype="float32")
-        # Inner product on normalized vectors == cosine similarity
         self.index = faiss.IndexFlatIP(embeddings.shape[1])
         self.index.add(embeddings)
 

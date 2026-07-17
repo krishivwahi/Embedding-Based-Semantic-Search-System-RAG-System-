@@ -25,7 +25,7 @@ for name, cls in [("TF-IDF", TfidfRetriever), ("Embeddings", EmbeddingRetriever)
     metrics["eval (s)"] = round(eval_s, 1)
     results[name] = metrics
 
-# Print comparison table
+# Printing the comparison table
 cols = list(next(iter(results.values())).keys())
 print(f"\n{'System':<12}" + "".join(f"{c:>12}" for c in cols))
 for name, m in results.items():
