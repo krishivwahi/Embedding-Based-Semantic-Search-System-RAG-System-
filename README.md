@@ -1,8 +1,20 @@
-# SciFact Semantic Search & RAG Pipeline
+# Production-Grade Semantic Search & RAG Pipeline
 
 A production level RAG (retrieval-augmented generation) system built from scratch to answer questions and verify scientific claims. (which actually works) 
 
 The system uses dense transformer embeddings and FAISS to perform semantic search across the BEIR SciFact dataset (~5,000 biomedical abstracts (almost)). An LLM is then grounded on the retrieved context to synthesize answers with exact citations.
+
+## System Architecture
+
+```mermaid
+graph LR
+    A[Document] --> B[Chunking]
+    B --> C[Embeddings]
+    C --> D[FAISS]
+    D --> E[Retriever]
+    E --> F[LLM]
+    F --> G[Answer]
+```
 
 ## Evaluation Results
 
