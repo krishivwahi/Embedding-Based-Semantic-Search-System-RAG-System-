@@ -1,8 +1,8 @@
 # Production-Grade Semantic Search & RAG Pipeline
 
-A production level RAG (retrieval-augmented generation) system built from scratch to answer questions and verify scientific claims. (which actually works) 
+A production level RAG (retrieval-augmented generation) system built from scratch to answer questions and verify scientific claims. (which actually works)
 
-The system uses dense transformer embeddings and FAISS to perform semantic search across the BEIR SciFact dataset (~5,000 biomedical abstracts (almost)). An LLM is then grounded on the retrieved context to synthesize answers with exact citations.
+The system uses dense transformer embeddings and FAISS to perform semantic search across the BEIR SciFact dataset (a rigorous academic benchmark containing ~5,000 peer-reviewed biomedical abstracts and expert-annotated queries). An LLM is then grounded on the retrieved context to synthesize answers with exact citations.
 
 ## System Architecture
 
@@ -18,29 +18,32 @@ graph LR
 
 ## Evaluation Results
 
-To prove that dense embeddings actually retrieve better context than traditional lexical search, I built a baseline TF-IDF retriever and evaluated both approaches on 300 human-labeled test queries from the SciFact benchmark. (I was right btw)
+To ensure that dense embeddings actually retrieve better context than traditional lexical search, I built a baseline TF-IDF retriever and evaluated both approaches on 300 human-labeled test queries from the SciFact benchmark. (I was right btw)
 
-| System | P@10 | Recall@10 | MRR |
-|--------|------|-----------|-----|
-| TF-IDF | 0.0807 | 0.7235 | 0.5500 |
-| Embeddings | 0.0893 | 0.7900 | 0.6092 |
+| System     | P@10   | Recall@10 | MRR    |
+| ---------- | ------ | --------- | ------ |
+| TF-IDF     | 0.0807 | 0.7235    | 0.5500 |
+| Embeddings | 0.0893 | 0.7900    | 0.6092 |
 
 As expected, for dense retrieval on scientific literature, embeddings significantly outperformed keyword search, particularly in recall and Mean Reciprocal Rank (placing the correct document higher in the results).
 
 ## Running it Locally
 
 1. **Install dependencies:**
+
    ```bash
    pip install -r requirements.txt
    ```
 
 2. **Download the dataset:**
+
    ```bash
    python download_data.py
    ```
 
 3. **Set up the LLM:**
-   Create a `.env` file at the root of the project. You can use Groq (that's what I used :*):
+   Create a `.env` file at the root of the project. You can use Groq (that's what I used :\*):
+
    ```env
    API_KEY = your_key_here
    BASE_URL = url_here
