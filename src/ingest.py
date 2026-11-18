@@ -7,6 +7,8 @@ class Chunk:
 
 
 def chunk_text(text: str, size: int = 500, overlap: int = 50):
+    if not 0 <= overlap < size:
+        raise ValueError(f"need 0 <= overlap < size, got overlap={overlap}, size={size}")
     words = text.split()
     chunks, i = [], 0
     while i < len(words):

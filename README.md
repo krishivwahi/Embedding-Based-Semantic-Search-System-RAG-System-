@@ -1,74 +1,155 @@
-# Production-Grade Semantic Search & RAG Pipeline
+# SciFact RAG: Hybrid Retrieval, Grounded Answers and Multi-Agent Claim Checking
 
-A production level RAG (retrieval-augmented generation) system built from scratch to answer questions and verify scientific claims. (which actually works)
+[![tests](https://github.com/krishivwahi/Embedding-Based-Semantic-Search-System-RAG-System-/actions/workflows/test.yml/badge.svg)](https://github.com/krishivwahi/Embedding-Based-Semantic-Search-System-RAG-System-/actions/workflows/test.yml)
 
-The system uses dense transformer embeddings and FAISS to perform semantic search across the BEIR SciFact dataset (a rigorous academic benchmark containing ~5,000 peer-reviewed biomedical abstracts and expert-annotated queries). An LLM is then grounded on the retrieved context to synthesize answers with exact citations.
+A retrieval-augmented generation system over [BEIR SciFact](https://github.com/beir-cellar/beir) (5,183 biomedical abstracts, 300 expert-labeled test queries). It covers the full path: chunking, sparse and dense retrieval, rank fusion, a Postgres + pgvector store, grounded answers with citations, a multi-agent claim checker built on Google ADK, per-request LLM metrics with OpenTelemetry traces, and a container ready for Cloud Run.
 
-## System Architecture
+Every design choice below is backed by a measurement on the SciFact test set.
+
+## Architecture
 
 ```mermaid
 graph LR
-    A[Document] --> B[Chunking]
-    B --> C[Embeddings]
-    C --> D[FAISS]
-    D --> E[Retriever]
-    E --> F[LLM]
-    F --> G[Answer]
+    A[SciFact abstracts] --> B[Chunking<br/>500 words, 50 overlap]
+    B --> C[BM25]
+    B --> D[MiniLM embeddings]
+    D --> E[(FAISS / pgvector)]
+    C --> F[Reciprocal rank fusion]
+    E --> F
+    F --> G[RAG answer<br/>with citations]
+    F --> H[ADK claim checker]
+    L[(Postgres<br/>claims + labels)] -.gold labels.-> I[Claim eval]
+    H --> I
+    G --> J[OpenTelemetry traces<br/>tokens, TTFT, cost]
+    H --> J
 ```
 
-## Evaluation Results
+## Retrieval results (ablation)
 
-To ensure that dense embeddings actually retrieve better context than traditional lexical search, I built a baseline TF-IDF retriever and evaluated both approaches on 300 human-labeled test queries from the SciFact benchmark. (I was right btw)
+300 SciFact test queries, top 10 documents. Run with `python run_eval.py`.
 
-| System     | P@10   | Recall@10 | MRR    |
-| ---------- | ------ | --------- | ------ |
-| TF-IDF     | 0.0807 | 0.7235    | 0.5500 |
-| Embeddings | 0.0893 | 0.7900    | 0.6092 |
+| System | nDCG@10 | P@10 | Recall@10 | MRR | ms/query |
+|---|---|---|---|---|---|
+| TF-IDF | 0.5835 | 0.0810 | 0.7268 | 0.5522 | 24.6 |
+| BM25 | 0.6628 | 0.0863 | 0.7793 | 0.6337 | 3.3 |
+| Dense (all-MiniLM-L6-v2) | 0.6512 | 0.0897 | 0.7933 | 0.6126 | 19.8 |
+| **Hybrid: BM25 + dense (RRF)** | **0.6913** | **0.0927** | **0.8219** | 0.6589 | 22.0 |
+| Hybrid + cross-encoder rerank | 0.6883 | 0.0917 | 0.8156 | 0.6596 | 3106.1 |
+| Dense via pgvector (HNSW) | 0.6512 | 0.0897 | 0.7933 | 0.6126 | 12.8 |
 
-As expected, for dense retrieval on scientific literature, embeddings significantly outperformed keyword search, particularly in recall and Mean Reciprocal Rank (placing the correct document higher in the results).
+Latency is measured on a laptop CPU (no GPU) and excludes model loading.
 
-## Running it Locally
+What the numbers say:
 
-1. **Install dependencies:**
+- **BM25 is a strong baseline.** This implementation scores 0.663 nDCG@10, matching the 0.665 reported for BM25 in the BEIR paper, and it beats the small dense model. TF-IDF is a much weaker comparison point.
+- **Hybrid retrieval is the clear win:** +3 nDCG points over BM25 and +4 over dense alone. Lexical and semantic retrieval miss different documents, and reciprocal rank fusion combines them without any score calibration.
+- **The reranker did not help.** `cross-encoder/ms-marco-MiniLM-L-6-v2` is trained on web search queries and does not transfer to biomedical claims. It adds latency for no gain, so the served pipeline is hybrid without reranking. A domain-tuned reranker is the obvious next experiment.
+- **pgvector matches exact search.** The HNSW index in Postgres returns the same quality as exact FAISS search, so the database can replace the in-memory index without losing accuracy.
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+## Claim verification: single-shot RAG vs. multi-agent
 
-2. **Download the dataset:**
+SciFact claims are labeled SUPPORT, CONTRADICT or NOT ENOUGH INFO against specific abstracts. `eval_claims.py` scores two systems on a fixed sample of dev claims, reading gold labels from Postgres with SQL:
 
-   ```bash
-   python download_data.py
-   ```
+- **Single-shot RAG:** retrieve 5 passages, one LLM call returns a label and cited doc IDs.
+- **ADK multi-agent** ([src/agent.py](src/agent.py)):
+  - A `SequentialAgent` orchestrator delegates to a **researcher**, which runs a ReAct loop: it decides its own search queries and searches again when results are off-topic.
+  - It then hands off to a **verifier → critic** `LoopAgent`, where the critic checks each citation and either approves or sends a critique back (self-reflection, up to 2 rounds).
 
-3. **Set up the LLM:**
-   Create a `.env` file at the root of the project. You can use Groq (that's what I used :\*):
+Reported per system: label accuracy, macro-F1, **citation precision** (the share of cited abstracts that are gold evidence), LLM calls, tokens, latency and $ per claim.
 
-   ```env
-   API_KEY = your_key_here
-   BASE_URL = url_here
-   MODEL= model_name
-   ```
+<!-- results: paste the table printed by `python eval_claims.py` here -->
 
-4. **Run the Interactive RAG terminal:**
-   ```bash
-   python ask.py
-   ```
+## Observability
 
-## Example Interaction
-
-The system uses strong grounding to prevent hallucination. When asked an overly broad or unanswerable question, the LLM will analyze the retrieved abstracts and explicitly state if a definitive answer isn't present, rather than guessing (which is the complete opposite of what I would do btw):
+Each answer reports its own cost and speed. [src/rag.py](src/rag.py) streams the completion to measure:
 
 ```text
-> can we solve cancer
-
---- Answer ---
-The context does not contain a direct answer to the question "can we solve cancer". The provided sources discuss various aspects of cancer, such as global statistics [1], biological capabilities of cancer cells [2], viral carcinogenesis [3], cancer stem cell hypothesis [4], and cancer chemoprevention [5], but do not provide a definitive answer to whether cancer can be solved.
-
---- Sources ---
-[1] (0.435) 52188256: Global cancer statistics 2018: GLOBOCAN estimates of incidence and mortality wor...
-[2] (0.429) 13011249: Hallmarks of Cancer: The Next Generation. The hallmarks of cancer comprise six b...
-[3] (0.420) 7451018: Viral Carcinogenesis.. Cancer has been recognized for thousands of years. Egypti...
-[4] (0.417) 31902335: The cancer stem cell hypothesis: a guide to potential molecular targets.. Common...
-[5] (0.412) 22267225: Cancer chemoprevention: Much has been done, but there is still much to do. State...
+<tokens in>+<tokens out> tokens | TTFT <s> | <s> total | <decode tok/s> | $<cost>
 ```
+
+The fields are tokens in and out, time to first token, decode speed, and cost (from `LLM_PRICE_IN` / `LLM_PRICE_OUT` per 1M tokens). Retrieval and generation are OpenTelemetry spans, and ADK adds its own spans for each agent, tool and model call. Traces are written to `traces.jsonl` locally; on GCP the exporter can be swapped for Cloud Trace.
+
+## Data layer
+
+`docker compose up -d && python load_pg.py` loads Postgres 17 + pgvector with:
+
+| Table | Contents |
+|---|---|
+| `chunks` | text, 384-d embedding (HNSW index), generated `tsvector` (GIN index) |
+| `claims` | 1,109 SciFact train/dev claims |
+| `claim_evidence` | claim → abstract → SUPPORT / CONTRADICT |
+
+The embeddings are copied from the cached FAISS index, so loading never re-embeds the corpus.
+
+## Running it
+
+```bash
+pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+python download_data.py
+python run_eval.py            # retrieval ablation (builds and caches the index on first run)
+python -m pytest tests        # metric, chunker, BM25 and fusion tests
+```
+
+For the LLM parts, create `.env`. Any OpenAI-compatible provider works for `ask.py` and the API; the ADK agent needs a Gemini model. A free [Google AI Studio](https://aistudio.google.com/apikey) key covers both:
+
+```env
+LLM_API_KEY=your_key
+LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+LLM_MODEL=gemini-2.5-flash
+```
+
+```bash
+python ask.py                                         # interactive Q&A in the terminal
+docker compose up -d && python load_pg.py             # Postgres + pgvector
+python eval_claims.py 30                              # claim verification eval on 30 dev claims
+```
+
+### HTTP API (Docker)
+
+```bash
+docker build -t scifact-rag .
+docker run -p 8080:8080 --env-file .env scifact-rag
+curl -X POST localhost:8080/ask    -H 'content-type: application/json' -d '{"question": "Does vitamin D reduce fracture risk?"}'
+curl -X POST localhost:8080/verify -H 'content-type: application/json' -d '{"claim": "Vitamin D supplementation reduces fractures."}'
+```
+
+The image ships with the dataset, FAISS index and model weights already built (CPU-only torch, 2.45 GB), so it serves requests about 12 s after starting.
+
+### Deploying to Cloud Run
+
+This needs a GCP project with billing enabled. Cloud Run scales to zero, so demo traffic stays within the free tier; storing the image in Artifact Registry costs a few cents a month.
+
+```bash
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com secretmanager.googleapis.com
+printf %s "$LLM_API_KEY" | gcloud secrets create llm-api-key --data-file=-
+gcloud secrets add-iam-policy-binding llm-api-key \
+  --member "serviceAccount:$(gcloud projects describe $(gcloud config get project) --format='value(projectNumber)')-compute@developer.gserviceaccount.com" \
+  --role roles/secretmanager.secretAccessor
+gcloud run deploy scifact-rag --source . --region us-central1 \
+  --memory 2Gi --cpu 2 --min-instances 0 --max-instances 1 --allow-unauthenticated \
+  --set-env-vars LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/,LLM_MODEL=gemini-2.5-flash \
+  --set-secrets LLM_API_KEY=llm-api-key:latest
+```
+
+The API key lives in Secret Manager and is never baked into the image.
+
+## Project layout
+
+| Path | Purpose |
+|---|---|
+| `src/ingest.py`, `src/dataset.py` | chunking, BEIR loading |
+| `src/baseline.py` | TF-IDF and BM25 retrievers |
+| `src/embedding.py` | MiniLM + FAISS retriever with an on-disk index cache |
+| `src/fusion.py` | reciprocal rank fusion, cross-encoder reranker |
+| `src/pgstore.py` | Postgres schema, loader, pgvector retriever |
+| `src/rag.py`, `src/telemetry.py` | grounded answers, streaming metrics, tracing |
+| `src/agent.py` | ADK multi-agent claim checker |
+| `run_eval.py`, `eval_claims.py` | retrieval ablation, claim verification eval |
+| `app.py`, `Dockerfile` | FastAPI service, container |
+
+## Limitations
+
+- SciFact is small (5k documents). Exact FAISS search is fast at this size; HNSW in pgvector matters only at larger scales.
+- The dense model is a general-purpose 22M-parameter encoder. Biomedical encoders would likely score higher.
+- The agent is Gemini-only through ADK's native client. Other providers need ADK's LiteLLM wrapper.
+- Claim-verification results come from a sample of dev claims sized for free-tier rate limits, not the full dev set.

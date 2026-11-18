@@ -1,16 +1,16 @@
 import json
 from pathlib import Path
-from .ingest import Chunk
+from .ingest import load_corpus
 
 def load_beir(data_dir: str):
     data_dir = Path(data_dir)
-    chunks = []
+    docs = {}
     with open(data_dir / "corpus.jsonl", encoding="utf-8") as f:
         for line in f:
             d = json.loads(line)
-            text = (d.get("title", "") + ". " + d["text"]).strip(". ")
-            chunks.append(Chunk(doc_id=d["_id"], chunk_id=0, text=text))
-    
+            docs[d["_id"]] = (d.get("title", "") + ". " + d["text"]).strip(". ")
+    chunks = load_corpus(docs)
+
     all_queries = {}
     with open(data_dir / "queries.jsonl", encoding="utf-8") as f:
         for line in f:

@@ -1,8 +1,16 @@
+import math
+
 def precision_at_k(retrieved: list[str], relevant: set[str], k: int) -> float:
     return len(set(retrieved[:k]) & relevant) / k
 
 def recall_at_k(retrieved: list[str], relevant: set[str], k: int) -> float:
     return len(set(retrieved[:k]) & relevant) / len(relevant)
+
+def ndcg_at_k(retrieved: list[str], relevant: set[str], k: int) -> float:
+    # binary relevance, which is all SciFact's qrels have
+    dcg = sum(1 / math.log2(rank + 1) for rank, d in enumerate(retrieved[:k], start=1) if d in relevant)
+    idcg = sum(1 / math.log2(rank + 1) for rank in range(1, min(len(relevant), k) + 1))
+    return dcg / idcg
 
 def mrr(retrieved: list[str], relevant: set[str]) -> float:
     for rank, doc_id in enumerate(retrieved, start=1):
@@ -11,7 +19,7 @@ def mrr(retrieved: list[str], relevant: set[str]) -> float:
     return 0.0
 
 def evaluate(retriever, queries: dict, qrels: dict, k: int = 10) -> dict:
-    p, r, m = [], [], []
+    p, r, m, nd = [], [], [], []
     for qid, query in queries.items():
         results = retriever.search(query, k=k * 2)
         doc_ids = []
@@ -22,8 +30,10 @@ def evaluate(retriever, queries: dict, qrels: dict, k: int = 10) -> dict:
         p.append(precision_at_k(doc_ids, relevant, k))
         r.append(recall_at_k(doc_ids, relevant, k))
         m.append(mrr(doc_ids, relevant))
+        nd.append(ndcg_at_k(doc_ids, relevant, k))
     n = len(queries)
     return {
+        f"nDCG@{k}": sum(nd) / n,
         f"P@{k}": sum(p) / n,
         f"Recall@{k}": sum(r) / n,
         "MRR": sum(m) / n,

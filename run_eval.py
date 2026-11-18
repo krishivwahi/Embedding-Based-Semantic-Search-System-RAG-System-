@@ -1,32 +1,41 @@
+import os
 import time
 from src.dataset import load_beir
-from src.baseline import TfidfRetriever
+from src.baseline import BM25Retriever, TfidfRetriever
 from src.embedding import EmbeddingRetriever
+from src.fusion import HybridRetriever, RerankRetriever
 from src.evaluate import evaluate
 
 K = 10
 
 print("Loading SciFact...")
 chunks, queries, qrels = load_beir("data/scifact")
-print(f"{len(chunks)} docs, {len(queries)} labeled queries\n")
+print(f"{len(chunks)} chunks, {len(queries)} labeled queries\n")
+
+bm25 = BM25Retriever(chunks)
+dense = EmbeddingRetriever(chunks, index_path="data/scifact.faiss")
+hybrid = HybridRetriever([bm25, dense])
+systems = {
+    "TF-IDF": TfidfRetriever(chunks),
+    "BM25": bm25,
+    "Dense (MiniLM)": dense,
+    "Hybrid (RRF)": hybrid,
+    "Hybrid + rerank": RerankRetriever(hybrid),
+}
+if os.environ.get("DATABASE_URL"):  # set it after `docker compose up -d && python load_pg.py`
+    from src.pgstore import PgVectorRetriever
+    systems["Dense via pgvector (HNSW)"] = PgVectorRetriever(dense.model)
 
 results = {}
-for name, cls in [("TF-IDF", TfidfRetriever), ("Embeddings", EmbeddingRetriever)]:
-    print(f"Building {name} index...")
-    t0 = time.time()
-    retriever = cls(chunks)
-    build_s = time.time() - t0
-    
+for name, retriever in systems.items():
+    print(f"Evaluating {name}...")
     t0 = time.time()
     metrics = evaluate(retriever, queries, qrels, k=K)
-    eval_s = time.time() - t0
-    
-    metrics["build (s)"] = round(build_s, 1)
-    metrics["eval (s)"] = round(eval_s, 1)
+    metrics["ms/query"] = round(1000 * (time.time() - t0) / len(queries), 1)
     results[name] = metrics
 
-# Printing the comparison table
 cols = list(next(iter(results.values())).keys())
-print(f"\n{'System':<12}" + "".join(f"{c:>12}" for c in cols))
+print("\n| System | " + " | ".join(cols) + " |")
+print("|---" * (len(cols) + 1) + "|")
 for name, m in results.items():
-    print(f"{name:<12}" + "".join(f"{m[c]:>12.4f}" if isinstance(m[c], float) else f"{m[c]:>12}" for c in cols))
+    print(f"| {name} | " + " | ".join(f"{m[c]:.4f}" if c != "ms/query" else str(m[c]) for c in cols) + " |")
